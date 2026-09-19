@@ -1,41 +1,48 @@
 ---
-description: Build pipeline — implement spec then validate with lint/test/validate/audit
+description: Build pipeline — implement spec then validate with concurrent checks
 ---
-Use the subagent tool to build the feature: $@
+Use subagent tool to build feature: $@
 
 ## Steps
 
-1. Derive the feature slug from the task
+1. Derive feature slug from task
 2. Verify `.ai/features/{slug}/spec.md` exists
-3. Choose the smallest suitable chain based on the spec and user preference
-4. Run it with the subagent tool
-5. Report every stage result clearly
+3. Choose smallest suitable workflow based on spec and user preference
+4. Run it with subagent tool
+5. Report phase result clearly
 
 ## Full Pipeline
 
-```
+```ts
 subagent({
-  chain: [
-    { agent: "builder", task: "Implement the spec at .ai/features/{slug}/spec.md. Read scout.md for context if available." },
-    { agent: "linter", task: "Lint the changed files listed in .ai/features/{slug}/changes.md" },
-    { agent: "tester", task: "Run tests for the changed files listed in .ai/features/{slug}/changes.md" },
-    { agent: "validator", task: "Validate implementation matches spec. Read .ai/features/{slug}/spec.md and .ai/features/{slug}/changes.md" },
-    { agent: "auditor", task: "Security audit the changes. Read .ai/features/{slug}/changes.md and .ai/features/{slug}/spec.md" }
-  ]
+  workflow: {
+    phases: [
+      { name: "Build", tasks: [
+        { agent: "builder", task: "Implement spec at .ai/features/{slug}/spec.md. Read scout.md for context if available." }
+      ] },
+      { name: "Validate", tasks: [
+        { agent: "linter", task: "Lint changed files listed in .ai/features/{slug}/changes.md" },
+        { agent: "tester", task: "Run tests for changed files listed in .ai/features/{slug}/changes.md" },
+        { agent: "validator", task: "Validate implementation matches spec. Read .ai/features/{slug}/spec.md and .ai/features/{slug}/changes.md" },
+        { agent: "auditor", task: "Security audit changes. Read .ai/features/{slug}/changes.md and .ai/features/{slug}/spec.md" }
+      ] }
+    ]
+  }
 })
 ```
 
-## Chain Variants
+## Workflow Variants
 
-- **Quick iteration:** builder only
-- **Standard:** builder → linter → tester
-- **With validation:** builder → linter → tester → validator
-- **Full pipeline:** builder → linter → tester → validator → auditor
-- **Security focus:** builder → auditor
+- **Quick iteration:** Build phase only
+- **Standard:** Build, then concurrent linter + tester
+- **With validation:** Build, then concurrent linter + tester + validator
+- **Full pipeline:** Build, then concurrent linter + tester + validator + auditor
+- **Security focus:** Build, then auditor
 
 ## Important
 
-- Build blocks while chain runs and streams progress
-- Process failures stop chain at failing step
-- Re-run `/build` to retry
-- Report what passed, failed, or produced findings
+- Every variant starts with builder-only phase
+- Checks in second phase run concurrently
+- Failed checks cancel unfinished sibling checks, then builder receives failure feedback for repair
+- Workflow retries each phase up to 3 times after initial attempt
+- Report passed, failed, canceled, or findings

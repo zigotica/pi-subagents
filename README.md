@@ -2,13 +2,13 @@
 
 Subagent extension for [Pi agent harness](https://pi.dev) based on [official subagent example](https://github.com/earendil-works/pi/tree/main/packages/coding-agent/examples/extensions/subagent). Adds persistent interactive planning, structured build-validation workflows, per-agent model and thinking configuration, and fallback to parent session settings.
 
-Extension uses modular, testable architecture: schemas, process execution, workflow orchestration, and TUI rendering are separated behind explicit dependency boundaries. This enables deterministic testing of single, parallel, and chained subagents without launching real Pi processes or calling models.
+Extension uses modular, testable architecture: schemas, process execution, workflow orchestration, and TUI rendering are separated behind explicit dependency boundaries. This enables deterministic testing of single, parallel, and phased workflow subagents without launching real Pi processes or calling models.
 
 ## Workflow
 
 ```text
 /plan <task>   Start scout plus persistent interactive planner
-/build <task>  Run blocking implementation and validation chain
+/build <task>  Run blocking phased implementation and validation workflow
 ```
 
 ## Extension Architecture
@@ -19,7 +19,7 @@ extensions/subagent/
 ├── schema.ts   Tool schemas and shared contracts
 ├── agents.ts   User and project agent discovery
 ├── runner.ts   Pi process lifecycle, event parsing, fallback, and prompts
-├── execute.ts  Single, parallel, and chain orchestration
+├── execute.ts  Single, parallel, and phased workflow orchestration
 └── render.ts   TUI call and result rendering
 ```
 
@@ -55,25 +55,30 @@ Standard `/plan` starts scout, then a persistent planner child. Planner returns 
 └── changes.md
 ```
 
-Downstream lint, test, validation, and audit results return through chain output rather than extra artifact files.
+Downstream lint, test, validation, and audit results return through workflow output rather than extra artifact files.
 
 Planner sessions use Pi's standard project-scoped session storage under global Pi config. Extension supplies stable session ID but does not override Pi's session directory.
 
-## Chain Composition
+## Phased Build Workflow
 
-Parent chooses smallest suitable chain:
+`/build` uses `subagent` workflow mode. First builder-only phase must settle before validation starts. Selected linter, tester, validator, and auditor tasks share second phase and run concurrently, bounded at four active agents.
 
-| Chain                                           | Use                       |
-| ----------------------------------------------- | ------------------------- |
-| builder                                         | Quick implementation      |
-| builder → linter                                | Quick static verification |
-| builder → tester                                | Functional verification   |
-| builder → linter → tester                       | Standard                  |
-| builder → linter → tester → validator           | Standard plus spec check  |
-| builder → linter → tester → validator → auditor | Full pipeline             |
-| builder → auditor                               | Security-focused          |
+| Workflow | Validation phase |
+| -------- | ---------------- |
+| Quick | none |
+| Standard | linter + tester |
+| With validation | linter + tester + validator |
+| Full pipeline | linter + tester + validator + auditor |
+| Security focus | auditor |
 
-Build uses existing blocking `subagent` chain mode. Re-run `/build` to retry. No workflow status or resume commands.
+```ts
+subagent({ workflow: { phases: [
+  { name: "Build", tasks: [{ agent: "builder", task: "Implement spec" }] },
+  { name: "Checks", tasks: [{ agent: "linter", task: "Lint changes" }, { agent: "tester", task: "Run tests" }] },
+] } })
+```
+
+First failed task cancels unfinished sibling checks and queued checks never start. After all started siblings settle, workflow reruns previous builder phase with bounded failure feedback, then reruns whole failed validation phase. Every phase has initial attempt plus three retries by default; exhausted retries stop later phases. External abort cancels active work and starts no repair. Workflow history retains completed, failed, canceled, and pending task states for rendering; retries retain chronological phase-attempt history.
 
 ## Development
 

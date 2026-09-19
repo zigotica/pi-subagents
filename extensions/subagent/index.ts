@@ -43,7 +43,7 @@ export function createSubagentTool(deps: SubagentToolDependencies): any {
 		label: "Subagent",
 		description: [
 			"Delegate tasks to specialized subagents with isolated context.",
-			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
+			"Modes: single (agent + task), parallel (tasks array), workflow (ordered concurrent phases with repair retries).", 
 			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
 			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project").`,
 		].join(" "),

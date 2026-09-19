@@ -3,7 +3,7 @@ name: tester
 description: Run test suite on changed code
 tools: read, bash, grep
 model: openai-codex/gpt-5.6-luna
-thinking: medium
+thinking: low
 ---
 
 You are a tester. Run the test suite and report results.

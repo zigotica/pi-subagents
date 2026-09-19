@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { Value } from "typebox/value";
-import { SubagentParamsSchema } from "./schema.ts";
+import { MAX_WORKFLOW_RETRIES, SubagentParamsSchema } from "./schema.ts";
 
 describe("schema", () => {
 	test("accepts valid single-mode input with required fields", () => {
@@ -56,25 +56,6 @@ describe("schema", () => {
 		);
 	});
 
-	test("accepts chain items and item options", () => {
-		assert.equal(
-			Value.Check(SubagentParamsSchema, {
-				chain: [
-					{
-						agent: "planner",
-						task: "Plan work",
-						model: "anthropic/claude-sonnet-4",
-						modelFallback: "current",
-						outputFile: "plan.md",
-						cwd: "/tmp/plan",
-					},
-					{ agent: "writer", task: "Write {previous}", modelFallback: "stop" },
-				],
-			}),
-			true,
-		);
-	});
-
 	test("rejects invalid top-level primitive types", () => {
 		const invalidValues = [
 			{ agent: 1, task: "Work" },
@@ -84,7 +65,6 @@ describe("schema", () => {
 			{ agent: "worker", task: "Work", cwd: false },
 			{ agent: "worker", task: "Work", session: 1 },
 			{ agent: "worker", task: "Work", tasks: "not-an-array" },
-			{ agent: "worker", task: "Work", chain: {} },
 			{ agent: "worker", task: "Work", agentScope: true },
 			{ agent: "worker", task: "Work", modelFallback: 1 },
 			{ agent: "worker", task: "Work", confirmProjectAgents: "yes" },
@@ -110,29 +90,9 @@ describe("schema", () => {
 		}
 	});
 
-	test("rejects invalid primitive types in chain items", () => {
-		const invalidItems = [
-			{ agent: 1, task: "Work" },
-			{ agent: "worker", task: 1 },
-			{ agent: "worker", task: "Work", model: false },
-			{ agent: "worker", task: "Work", modelFallback: 1 },
-			{ agent: "worker", task: "Work", outputFile: false },
-			{ agent: "worker", task: "Work", cwd: 1 },
-		];
-
-		for (const item of invalidItems) {
-			assert.equal(Value.Check(SubagentParamsSchema, { chain: [item] }), false);
-		}
-	});
-
 	test("rejects parallel items missing agent or task", () => {
 		assert.equal(Value.Check(SubagentParamsSchema, { tasks: [{ task: "Work" }] }), false);
 		assert.equal(Value.Check(SubagentParamsSchema, { tasks: [{ agent: "worker" }] }), false);
-	});
-
-	test("rejects chain items missing agent or task", () => {
-		assert.equal(Value.Check(SubagentParamsSchema, { chain: [{ task: "Work" }] }), false);
-		assert.equal(Value.Check(SubagentParamsSchema, { chain: [{ agent: "worker" }] }), false);
 	});
 
 	test("rejects unsupported agentScope values", () => {
@@ -147,6 +107,37 @@ describe("schema", () => {
 
 	test("rejects unsupported item-level modelFallback values", () => {
 		assert.equal(Value.Check(SubagentParamsSchema, { tasks: [{ agent: "worker", task: "Work", modelFallback: "retry" }] }), false);
-		assert.equal(Value.Check(SubagentParamsSchema, { chain: [{ agent: "worker", task: "Work", modelFallback: 1 }] }), false);
+	});
+
+	test("accepts bounded workflow phases and retry options", () => {
+		const workflow = { phases: [
+			{ name: "Build", tasks: [{ agent: "builder", task: "Build it", modelFallback: "current" }] },
+			{ name: "Checks", tasks: [{ agent: "tester", task: "Test it", outputFile: "test.txt", cwd: "/tmp" }] },
+		] };
+		assert.equal(Value.Check(SubagentParamsSchema, { workflow }), true);
+		assert.equal(Value.Check(SubagentParamsSchema, { workflow: { ...workflow, maxRetries: 0 } }), true);
+		assert.equal(Value.Check(SubagentParamsSchema, { workflow: { ...workflow, maxRetries: 3 } }), true);
+		assert.equal(Value.Check(SubagentParamsSchema, { workflow: { ...workflow, maxRetries: MAX_WORKFLOW_RETRIES } }), true);
+	});
+
+	test("rejects workflow combined with another execution mode", () => {
+		const workflow = { phases: [{ name: "Build", tasks: [{ agent: "builder", task: "Build" }] }] };
+		assert.equal(Value.Check(SubagentParamsSchema, { workflow, tasks: [{ agent: "tester", task: "Test" }] }), false);
+		assert.equal(Value.Check(SubagentParamsSchema, { workflow, agent: "tester", task: "Test" }), false);
+	});
+
+	test("rejects malformed bounded workflow fields", () => {
+		const task = { agent: "worker", task: "Work" };
+		const invalid = [
+			{ workflow: { phases: [] } },
+			{ workflow: { phases: [{ name: "", tasks: [task] }] } },
+			{ workflow: { phases: [{ name: "One", tasks: [] }] } },
+			{ workflow: { phases: Array.from({ length: 9 }, () => ({ name: "One", tasks: [task] })) } },
+			{ workflow: { phases: [{ name: "One", tasks: Array.from({ length: 9 }, () => task) }] } },
+			{ workflow: { phases: [{ name: "One", tasks: [task] }], maxRetries: -1 } },
+			{ workflow: { phases: [{ name: "One", tasks: [task] }], maxRetries: 1.5 } },
+			{ workflow: { phases: [{ name: "One", tasks: [task] }], maxRetries: MAX_WORKFLOW_RETRIES + 1 } },
+		];
+		for (const value of invalid) assert.equal(Value.Check(SubagentParamsSchema, value), false);
 	});
 });

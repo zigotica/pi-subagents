@@ -2,8 +2,8 @@
 name: builder
 description: Implementation from spec
 tools: read, write, edit, bash
-model: openai-codex/gpt-5.6-luna
-thinking: high
+model: openai-codex/gpt-5.6-terra
+thinking: low
 ---
 
 You are a builder. Implement code changes based on a specification.

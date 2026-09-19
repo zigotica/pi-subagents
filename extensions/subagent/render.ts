@@ -166,24 +166,13 @@ export function getDisplayItems(messages: Message[]): DisplayItem[] {
 export function renderCall(args: any, theme: any, _context?: any): Text {
 
 			const scope: AgentScope = args.agentScope ?? "user";
-			if (args.chain && args.chain.length > 0) {
-				let text =
-					theme.fg("toolTitle", theme.bold("subagent ")) +
-					theme.fg("accent", `chain (${args.chain.length} steps)`) +
-					theme.fg("muted", ` [${scope}]`);
-				for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
-					const step = args.chain[i];
-					// Clean up {previous} placeholder for display
-					const cleanTask = step.task.replace(/\{previous\}/g, "").trim();
-					const preview = cleanTask.length > 40 ? `${cleanTask.slice(0, 40)}...` : cleanTask;
-					text +=
-						"\n  " +
-						theme.fg("muted", `${i + 1}.`) +
-						" " +
-						theme.fg("accent", step.agent) +
-						theme.fg("dim", ` ${preview}`);
+			if (args.workflow?.phases?.length > 0) {
+				let text = theme.fg("toolTitle", theme.bold("subagent ")) + theme.fg("accent", `workflow (${args.workflow.phases.length} phases)`) + theme.fg("muted", ` [${scope}]`);
+				for (const [index, phase] of args.workflow.phases.slice(0, 3).entries()) {
+					const preview = phase.tasks.slice(0, 3).map((task: any) => `${task.agent}: ${task.task.length > 28 ? `${task.task.slice(0, 28)}...` : task.task}`).join(", ");
+					text += `\n  ${theme.fg("muted", `${index + 1}.`)} ${theme.fg("accent", phase.name)}${theme.fg("dim", ` (${phase.tasks.length}: ${preview})`)}`;
 				}
-				if (args.chain.length > 3) text += `\n  ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
+				if (args.workflow.phases.length > 3) text += `\n  ${theme.fg("muted", `... +${args.workflow.phases.length - 3} more phases`)}`;
 				return new Text(text, 0, 0);
 			}
 			if (args.tasks && args.tasks.length > 0) {
@@ -305,84 +294,62 @@ export function renderResult(result: AgentToolResult<SubagentDetails> | any, { e
 				return total;
 			};
 
-			if (details.mode === "chain") {
-				const successCount = details.results.filter((r) => r.exitCode === 0).length;
-				const icon = successCount === (details.totalSteps || details.results.length) ? theme.fg("success", "✓") : theme.fg("error", "✗");
-
+			if (details.mode === "workflow" && details.workflow) {
+				const workflow = details.workflow;
+				const statusIcon = (status: string) => status === "completed" ? theme.fg("success", "✓") : status === "failed" ? theme.fg("error", "✗") : status === "canceled" ? theme.fg("muted", "⊘") : status === "running" ? theme.fg("warning", "⏳") : theme.fg("muted", "○");
+				const taskIcon = (status: string | undefined) => statusIcon(status ?? "pending");
+				const header = `${theme.fg("toolTitle", theme.bold("workflow "))}${theme.fg("accent", `${workflow.totalPhases} phases, ${workflow.totalTasks} tasks`)}${theme.fg("muted", ` · retries ${workflow.maxRetries}`)}`;
+				const history = new Map<string, SingleResult[]>();
+				for (const item of details.results) {
+					const key = `${item.phaseIndex ?? 0}:${item.attempt ?? 0}`;
+					const group = history.get(key) ?? [];
+					group.push(item);
+					history.set(key, group);
+				}
 				if (expanded) {
 					const container = new Container();
-					container.addChild(
-						new Text(
-							icon +
-								" " +
-								theme.fg("toolTitle", theme.bold("chain ")) +
-								theme.fg("accent", `${successCount}/${details.totalSteps || details.results.length} steps`),
-							0,
-							0,
-						),
-					);
-
-					for (const r of details.results) {
-						const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
-						const displayItems = getDisplayItems(r.messages);
-						const finalOutput = getFinalOutput(r.messages);
-
+					container.addChild(new Text(header, 0, 0));
+					for (const phase of workflow.phases) {
 						container.addChild(new Spacer(1));
-						container.addChild(
-							new Text(
-								`${theme.fg("muted", `─── Step ${r.step}: `) + theme.fg("accent", r.agent)} ${rIcon}`,
-								0,
-								0,
-							),
-						);
-						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
-
-						// Show tool calls
-						for (const item of displayItems) {
-							if (item.type === "toolCall") {
-								container.addChild(
-									new Text(
-										theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme)),
-										0,
-										0,
-									),
-								);
+						container.addChild(new Text(`${statusIcon(phase.status)} ${theme.fg("accent", `Phase ${phase.index}: ${phase.name}`)}${theme.fg("muted", ` · attempt ${phase.attempt}${phase.repairState === "repairing" ? " · repair" : phase.repairState === "repaired" ? " · repaired" : ""}`)}`, 0, 0));
+						for (const [key, items] of history) {
+							if (!key.startsWith(`${phase.index}:`)) continue;
+							container.addChild(new Text(theme.fg("muted", `Attempt ${items[0].attempt}${items.some((item) => item.repairAttempt) ? " · repair" : ""}${items.some((item) => item.causativeFailure) ? " · causative failure" : ""}`), 0, 0));
+							for (const item of items) {
+								const model = item.taskStatus === "running" && item.model ? ` · ${item.model}${item.thinking ? ` (${item.thinking})` : ""}` : "";
+								container.addChild(new Text(`  ${taskIcon(item.taskStatus)} ${theme.fg("accent", item.agent)}${theme.fg("muted", ` · ${item.taskStatus ?? "pending"}${model}${item.canceledByWorkflow ? " (workflow canceled)" : ""}`)}`, 0, 0));
+								if (item.taskStatus !== "pending" && item.taskStatus !== "running") {
+									const output = getResultOutput(item);
+									if (output !== "(no output)") container.addChild(new Text(theme.fg("dim", `    ${truncateParallelOutput(output)}`), 0, 0));
+								}
 							}
 						}
-
-						// Show final output as markdown
-						if (finalOutput) {
-							container.addChild(new Spacer(1));
-							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
-						}
-
-						const stepUsage = formatUsageStats(r.usage, r.model);
-						if (stepUsage) container.addChild(new Text(theme.fg("dim", stepUsage), 0, 0));
 					}
-
-					const usageStr = formatUsageStats(aggregateUsage(details.results));
-					if (usageStr) {
-						container.addChild(new Spacer(1));
-						container.addChild(new Text(theme.fg("dim", `Total: ${usageStr}`), 0, 0));
-					}
+					const usage = formatUsageStats(aggregateUsage(details.results.filter((item) => item.executed !== false && item.taskStatus !== "pending")));
+					if (usage) { container.addChild(new Spacer(1)); container.addChild(new Text(theme.fg("dim", `Total: ${usage}`), 0, 0)); }
 					return container;
 				}
-
-				// Collapsed view
-				let text =
-					icon +
-					" " +
-					theme.fg("toolTitle", theme.bold("chain ")) +
-					theme.fg("accent", `${successCount}/${details.totalSteps || details.results.length} steps`);
-				for (const r of details.results) {
-					const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
-					const displayItems = getDisplayItems(r.messages);
-					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
-					if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
-					else text += `\n${renderDisplayItems(displayItems, 5)}`;
+				let text = header;
+				for (const phase of workflow.phases) {
+					const counts = phase.taskCounts;
+					const repair = phase.repairState === "repairing" ? " · repairing" : phase.repairState === "repaired" ? " · repaired" : "";
+					text += `\n${statusIcon(phase.status)} ${theme.fg("accent", `Phase ${phase.index}: ${phase.name}`)}${theme.fg("muted", ` · attempt ${phase.attempt} · ${counts.completed} completed, ${counts.running} running, ${counts.pending} pending, ${counts.failed} failed, ${counts.canceled} canceled${repair}`)}`;
+					// Keep compact phase-attempt chronology visible without expanding details.
+					for (const [key, items] of history) {
+						if (!key.startsWith(`${phase.index}:`)) continue;
+						const attemptCounts = { pending: 0, running: 0, completed: 0, failed: 0, canceled: 0 };
+						for (const item of items) attemptCounts[item.taskStatus ?? "pending"]++;
+						const markers = [
+							items.some((item) => item.repairAttempt) ? "repair" : "",
+							items.some((item) => item.causativeFailure) ? "causative failure" : "",
+						].filter(Boolean);
+						const taskSummary = (Object.entries(attemptCounts) as [keyof typeof attemptCounts, number][])
+							.filter(([, count]) => count > 0).map(([status, count]) => `${count} ${status}`).join(", ");
+						text += `\n  ${theme.fg("muted", `Attempt ${items[0].attempt} · ${taskSummary}${markers.length ? ` · ${markers.join(", ")}` : ""}`)}`;
+					}
 				}
-				const usageStr = formatUsageStats(aggregateUsage(details.results));
-				if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
+				const usage = formatUsageStats(aggregateUsage(details.results.filter((item) => item.executed !== false && item.taskStatus !== "pending")));
+				if (usage) text += `\n${theme.fg("dim", `Total: ${usage}`)}`;
 				text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
 				return new Text(text, 0, 0);
 			}

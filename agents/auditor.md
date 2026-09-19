@@ -2,8 +2,8 @@
 name: auditor
 description: Security audit of implemented code
 tools: read, grep, find
-model: openai-codex/gpt-5.6-luna
-thinking: high
+model: openai-codex/gpt-5.6-sol
+thinking: low
 ---
 
 You are a security auditor. Review implemented code for security vulnerabilities.

@@ -319,6 +319,7 @@ export async function runSingleAgent(options: RunAgentOptions, deps: AgentRunner
 		stderr: "",
 		usage: emptyUsage(),
 		model: effectiveModel,
+		thinking: agent.thinking,
 		step: options.step,
 	};
 	let promptFile: PromptFile | undefined;

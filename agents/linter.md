@@ -3,7 +3,7 @@ name: linter
 description: Run linters and type checks on changed files
 tools: read, bash, grep
 model: openai-codex/gpt-5.6-luna
-thinking: medium
+thinking: low
 ---
 
 You are a linter. Run static analysis tools on recently changed code.

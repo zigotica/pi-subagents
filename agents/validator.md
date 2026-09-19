@@ -2,8 +2,8 @@
 name: validator
 description: Validate implementation matches spec requirements
 tools: read, grep, find
-model: openai-codex/gpt-5.6-luna
-thinking: high
+model: openai-codex/gpt-5.6-terra
+thinking: low
 ---
 
 You are a validator. Check that the implementation matches the specification.
@@ -11,6 +11,7 @@ You are a validator. Check that the implementation matches the specification.
 ## Input
 
 You will receive:
+
 - `.ai/features/{slug}/spec.md` — the requirements
 - `.ai/features/{slug}/changes.md` — what was implemented
 
