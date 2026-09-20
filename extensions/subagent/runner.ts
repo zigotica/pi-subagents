@@ -112,6 +112,10 @@ export function buildHerdrPaneCommand(
 	].join("; ");
 }
 
+export function buildHerdrPaneLaunchCommand(launcherPath: string): string {
+	return shellQuote(launcherPath);
+}
+
 class HerdrProcessHandle implements ProcessHandle {
 	readonly stdout = new PushProcessStream();
 	readonly stderr = new PushProcessStream();
@@ -123,11 +127,13 @@ class HerdrProcessHandle implements ProcessHandle {
 	private stdoutOffset = 0;
 	private stderrOffset = 0;
 	private readonly dir: string;
+	private readonly launcherPath: string;
 	private readonly paths: { stdout: string; stderr: string; status: string; stdoutPipe: string; stderrPipe: string };
 	killed = false;
 
 	constructor(command: string, args: string[], options: ProcessOptions) {
 		this.dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-herdr-"));
+		this.launcherPath = path.join(this.dir, "run.sh");
 		this.paths = {
 			stdout: path.join(this.dir, "stdout.log"),
 			stderr: path.join(this.dir, "stderr.log"),
@@ -135,7 +141,12 @@ class HerdrProcessHandle implements ProcessHandle {
 			stdoutPipe: path.join(this.dir, "stdout.pipe"),
 			stderrPipe: path.join(this.dir, "stderr.pipe"),
 		};
-		void this.start(command, args, options);
+		fs.writeFileSync(
+			this.launcherPath,
+			`#!/bin/sh\n${buildHerdrPaneCommand(command, args, this.paths)}\n`,
+			{ encoding: "utf8", mode: 0o700 },
+		);
+		void this.start(options);
 	}
 
 	private async runHerdr(args: string[]): Promise<string> {
@@ -150,7 +161,7 @@ class HerdrProcessHandle implements ProcessHandle {
 		});
 	}
 
-	private async start(command: string, args: string[], options: ProcessOptions): Promise<void> {
+	private async start(options: ProcessOptions): Promise<void> {
 		try {
 			const splitOutput = await this.runHerdr([
 				"pane", "split", process.env.HERDR_PANE_ID!, "--direction", "right", "--cwd", options.cwd,
@@ -174,7 +185,7 @@ class HerdrProcessHandle implements ProcessHandle {
 				await this.closePane();
 				return;
 			}
-			await this.runHerdr(["pane", "run", this.paneId, buildHerdrPaneCommand(command, args, this.paths)]);
+			await this.runHerdr(["pane", "run", this.paneId, buildHerdrPaneLaunchCommand(this.launcherPath)]);
 			this.interval = setInterval(() => this.poll(), 50);
 			(this.interval as any).unref?.();
 		} catch (error) {

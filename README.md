@@ -65,6 +65,8 @@ Planner sessions use Pi's standard project-scoped session storage under global P
 
 When Pi is running inside [Herdr](https://herdr.dev), every plan/build subagent opens in a separate, named pane and reports that role (for example, `tester` or `validator`) as its displayed agent name in Herdr's Agents panel. The pane closes automatically when that subagent succeeds, fails, or is aborted. This activates only when `HERDR_ENV`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID` are all present and non-empty. Outside Herdr, subagents continue to run as ordinary child processes. When using `agent-sandbox pi --herdr`, install a sandbox version containing the `PI_SUBAGENT_SHELL` launcher support included in this repository.
 
+Herdr pane workers are started through a temporary launcher script rather than by pasting the full Pi invocation into the terminal. This keeps long planner prompts and follow-up turns below terminal input limits while preserving exact argument quoting.
+
 | Workflow | Validation phase |
 | -------- | ---------------- |
 | Quick | none |

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
 	buildHerdrPaneCommand,
+	buildHerdrPaneLaunchCommand,
 	isHerdrEnvironment,
 	runSingleAgent,
 	type ProcessHandle,
@@ -70,6 +71,13 @@ test("builds a quoted pane command that tees both streams and records status", (
 	assert.match(command, /tee '\/tmp\/run\/stdout\.log'/);
 	assert.match(command, /tee '\/tmp\/run\/stderr\.log'/);
 	assert.match(command, /printf '%s' "\$agent_status" > '\/tmp\/run\/status'/);
+});
+
+test("pane launch command remains short when the agent task is large", () => {
+	const launcherPath = "/tmp/pi-subagent-herdr-test/run.sh";
+	const paneCommand = buildHerdrPaneLaunchCommand(launcherPath);
+	assert.equal(paneCommand, "'/tmp/pi-subagent-herdr-test/run.sh'");
+	assert.ok(paneCommand.length < 100);
 });
 
 test("parses chunked, final, malformed, and accepted event lines", async () => {
