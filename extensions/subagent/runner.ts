@@ -13,6 +13,7 @@ export interface ProcessOptions {
 	cwd: string;
 	shell: false;
 	stdio: ["ignore", "pipe", "pipe"];
+	label?: string;
 }
 
 export interface ProcessStream {
@@ -73,8 +74,199 @@ class ChildProcessHandle implements ProcessHandle {
 	}
 }
 
+class PushProcessStream implements ProcessStream {
+	private readonly callbacks: Array<(chunk: Uint8Array) => void> = [];
+
+	onData(callback: (chunk: Uint8Array) => void): void {
+		this.callbacks.push(callback);
+	}
+
+	emit(chunk: Uint8Array): void {
+		for (const callback of this.callbacks) callback(chunk);
+	}
+}
+
+function shellQuote(value: string): string {
+	return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+export function isHerdrEnvironment(env: NodeJS.ProcessEnv = process.env): boolean {
+	return [env.HERDR_ENV, env.HERDR_SOCKET_PATH, env.HERDR_PANE_ID].every((value) => value !== undefined && value !== "");
+}
+
+export function buildHerdrPaneCommand(
+	command: string,
+	args: string[],
+	paths: { stdout: string; stderr: string; status: string; stdoutPipe: string; stderrPipe: string },
+): string {
+	const invocation = [command, ...args].map(shellQuote).join(" ");
+	return [
+		`mkfifo ${shellQuote(paths.stdoutPipe)} ${shellQuote(paths.stderrPipe)}`,
+		`tee ${shellQuote(paths.stdout)} < ${shellQuote(paths.stdoutPipe)} & out_tee=$!`,
+		`tee ${shellQuote(paths.stderr)} < ${shellQuote(paths.stderrPipe)} >&2 & err_tee=$!`,
+		`${invocation} > ${shellQuote(paths.stdoutPipe)} 2> ${shellQuote(paths.stderrPipe)}`,
+		"agent_status=$?",
+		"wait $out_tee",
+		"wait $err_tee",
+		`printf '%s' "$agent_status" > ${shellQuote(paths.status)}`,
+	].join("; ");
+}
+
+class HerdrProcessHandle implements ProcessHandle {
+	readonly stdout = new PushProcessStream();
+	readonly stderr = new PushProcessStream();
+	private readonly closeCallbacks: Array<(code: number | null) => void> = [];
+	private readonly errorCallbacks: Array<(error: Error) => void> = [];
+	private paneId?: string;
+	private interval?: NodeJS.Timeout;
+	private done = false;
+	private stdoutOffset = 0;
+	private stderrOffset = 0;
+	private readonly dir: string;
+	private readonly paths: { stdout: string; stderr: string; status: string; stdoutPipe: string; stderrPipe: string };
+	killed = false;
+
+	constructor(command: string, args: string[], options: ProcessOptions) {
+		this.dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-herdr-"));
+		this.paths = {
+			stdout: path.join(this.dir, "stdout.log"),
+			stderr: path.join(this.dir, "stderr.log"),
+			status: path.join(this.dir, "status"),
+			stdoutPipe: path.join(this.dir, "stdout.pipe"),
+			stderrPipe: path.join(this.dir, "stderr.pipe"),
+		};
+		void this.start(command, args, options);
+	}
+
+	private async runHerdr(args: string[]): Promise<string> {
+		return new Promise((resolve, reject) => {
+			const child = nodeSpawn("herdr", args, { shell: false, stdio: ["ignore", "pipe", "pipe"] });
+			let stdout = "";
+			let stderr = "";
+			child.stdout!.on("data", (chunk: Buffer | string) => { stdout += chunk.toString(); });
+			child.stderr!.on("data", (chunk: Buffer | string) => { stderr += chunk.toString(); });
+			child.on("error", reject);
+			child.on("close", (code) => code === 0 ? resolve(stdout) : reject(new Error(stderr.trim() || `herdr exited with code ${code}`)));
+		});
+	}
+
+	private async start(command: string, args: string[], options: ProcessOptions): Promise<void> {
+		try {
+			const splitOutput = await this.runHerdr([
+				"pane", "split", process.env.HERDR_PANE_ID!, "--direction", "right", "--cwd", options.cwd,
+				"--env", "PI_SUBAGENT_SHELL=1", "--no-focus",
+			]);
+			const response = JSON.parse(splitOutput) as { result?: { pane?: { pane_id?: string } } };
+			this.paneId = response.result?.pane?.pane_id;
+			if (!this.paneId) throw new Error("Herdr pane split did not return a pane id");
+			if (this.done) {
+				await this.closePane();
+				return;
+			}
+			if (options.label) {
+				await this.runHerdr(["pane", "rename", this.paneId, options.label]);
+				await this.runHerdr([
+					"pane", "report-metadata", this.paneId, "--source", "pi-subagent",
+					"--title", options.label, "--display-agent", options.label,
+				]);
+			}
+			if (this.done) {
+				await this.closePane();
+				return;
+			}
+			await this.runHerdr(["pane", "run", this.paneId, buildHerdrPaneCommand(command, args, this.paths)]);
+			this.interval = setInterval(() => this.poll(), 50);
+			(this.interval as any).unref?.();
+		} catch (error) {
+			this.fail(error instanceof Error ? error : new Error(String(error)));
+		}
+	}
+
+	private readNew(filePath: string, offset: number, stream: PushProcessStream): number {
+		try {
+			const size = fs.statSync(filePath).size;
+			if (size <= offset) return offset;
+			const fd = fs.openSync(filePath, "r");
+			try {
+				const chunk = Buffer.alloc(size - offset);
+				fs.readSync(fd, chunk, 0, chunk.length, offset);
+				stream.emit(chunk);
+			} finally {
+				fs.closeSync(fd);
+			}
+			return size;
+		} catch {
+			return offset;
+		}
+	}
+
+	private poll(): void {
+		this.stdoutOffset = this.readNew(this.paths.stdout, this.stdoutOffset, this.stdout);
+		this.stderrOffset = this.readNew(this.paths.stderr, this.stderrOffset, this.stderr);
+		try {
+			const code = Number.parseInt(fs.readFileSync(this.paths.status, "utf8"), 10);
+			if (Number.isNaN(code)) return;
+			this.finish(code);
+		} catch {
+			/* still running */
+		}
+	}
+
+	private finish(code: number): void {
+		if (this.done) return;
+		this.pollFinalOutput();
+		this.done = true;
+		if (this.interval) clearInterval(this.interval);
+		void this.closePane().finally(() => {
+			for (const callback of this.closeCallbacks) callback(code);
+			void fs.promises.rm(this.dir, { recursive: true, force: true });
+		});
+	}
+
+	private pollFinalOutput(): void {
+		this.stdoutOffset = this.readNew(this.paths.stdout, this.stdoutOffset, this.stdout);
+		this.stderrOffset = this.readNew(this.paths.stderr, this.stderrOffset, this.stderr);
+	}
+
+	private fail(error: Error): void {
+		if (this.done) return;
+		this.done = true;
+		if (this.interval) clearInterval(this.interval);
+		this.stderr.emit(Buffer.from(`${error.message}\n`));
+		void this.closePane().finally(() => {
+			for (const callback of this.errorCallbacks) callback(error);
+			void fs.promises.rm(this.dir, { recursive: true, force: true });
+		});
+	}
+
+	private async closePane(): Promise<void> {
+		if (!this.paneId) return;
+		try {
+			await this.runHerdr(["pane", "close", this.paneId]);
+		} catch {
+			// Pane cleanup is best-effort and must not replace the agent result.
+		}
+	}
+
+	onClose(callback: (code: number | null) => void): void { this.closeCallbacks.push(callback); }
+	onError(callback: (error: Error) => void): void { this.errorCallbacks.push(callback); }
+
+	kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
+		this.killed = true;
+		if (!this.paneId) {
+			this.finish(signal === "SIGKILL" ? 137 : 143);
+			return true;
+		}
+		const key = signal === "SIGKILL" ? "ctrl+\\" : "ctrl+c";
+		void this.runHerdr(["pane", "send-keys", this.paneId, key])
+			.finally(() => setTimeout(() => this.finish(signal === "SIGKILL" ? 137 : 143), 250));
+		return true;
+	}
+}
+
 export const productionProcessRunner: ProcessRunner = {
 	spawn(command, args, options) {
+		if (isHerdrEnvironment()) return new HerdrProcessHandle(command, args, options);
 		return new ChildProcessHandle(nodeSpawn(command, args, options));
 	},
 };
@@ -222,6 +414,7 @@ async function runProcess(
 		cwd: options.cwd ?? options.defaultCwd,
 		shell: false,
 		stdio: ["ignore", "pipe", "pipe"],
+		label: options.agentName,
 	});
 	let buffer = "";
 	let wasAborted = false;

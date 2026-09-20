@@ -63,6 +63,8 @@ Planner sessions use Pi's standard project-scoped session storage under global P
 
 `/build` uses `subagent` workflow mode. First builder-only phase must settle before validation starts. Selected linter, tester, validator, and auditor tasks share second phase and run concurrently, bounded at four active agents.
 
+When Pi is running inside [Herdr](https://herdr.dev), every plan/build subagent opens in a separate, named pane and reports that role (for example, `tester` or `validator`) as its displayed agent name in Herdr's Agents panel. The pane closes automatically when that subagent succeeds, fails, or is aborted. This activates only when `HERDR_ENV`, `HERDR_SOCKET_PATH`, and `HERDR_PANE_ID` are all present and non-empty. Outside Herdr, subagents continue to run as ordinary child processes. When using `agent-sandbox pi --herdr`, install a sandbox version containing the `PI_SUBAGENT_SHELL` launcher support included in this repository.
+
 | Workflow | Validation phase |
 | -------- | ---------------- |
 | Quick | none |

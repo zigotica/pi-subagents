@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { runSingleAgent, type ProcessHandle, type ProcessRunner, type ProcessStream, type PromptFileStore } from "./runner.ts";
+import {
+	buildHerdrPaneCommand,
+	isHerdrEnvironment,
+	runSingleAgent,
+	type ProcessHandle,
+	type ProcessRunner,
+	type ProcessStream,
+	type PromptFileStore,
+} from "./runner.ts";
 
 class Stream implements ProcessStream {
 	private callback?: (chunk: Uint8Array) => void;
@@ -44,6 +52,26 @@ function options(onUpdate?: () => void) {
 }
 
 describe("runner", () => {
+test("detects Herdr only when all required variables are non-empty", () => {
+	assert.equal(isHerdrEnvironment({ HERDR_ENV: "1", HERDR_SOCKET_PATH: "/tmp/herdr.sock", HERDR_PANE_ID: "w1:p1" }), true);
+	assert.equal(isHerdrEnvironment({ HERDR_ENV: "1", HERDR_SOCKET_PATH: "", HERDR_PANE_ID: "w1:p1" }), false);
+	assert.equal(isHerdrEnvironment({ HERDR_ENV: "1", HERDR_SOCKET_PATH: "/tmp/herdr.sock" }), false);
+});
+
+test("builds a quoted pane command that tees both streams and records status", () => {
+	const command = buildHerdrPaneCommand("/path/pi agent", ["-p", "don't interpolate $HOME"], {
+		stdout: "/tmp/run/stdout.log",
+		stderr: "/tmp/run/stderr.log",
+		status: "/tmp/run/status",
+		stdoutPipe: "/tmp/run/stdout.pipe",
+		stderrPipe: "/tmp/run/stderr.pipe",
+	});
+	assert.match(command, /'\/path\/pi agent' '-p' 'don'\\''t interpolate \$HOME'/);
+	assert.match(command, /tee '\/tmp\/run\/stdout\.log'/);
+	assert.match(command, /tee '\/tmp\/run\/stderr\.log'/);
+	assert.match(command, /printf '%s' "\$agent_status" > '\/tmp\/run\/status'/);
+});
+
 test("parses chunked, final, malformed, and accepted event lines", async () => {
 	const process = new Process();
 	const calls: any[] = [];
