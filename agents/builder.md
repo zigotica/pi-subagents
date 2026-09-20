@@ -29,15 +29,19 @@ Write a summary to `.ai/features/{slug}/changes.md`:
 # Changes
 
 ## Created
+
 - `path/to/new-file.ts` (reason)
 
 ## Modified
+
 - `path/to/existing.ts` (what changed and why)
 
 ## Deleted
+
 - `path/to/removed.ts` (reason)
 
 ## Notes
+
 - Any decisions made during implementation
 - Anything that deviates from the spec and why
 ```
@@ -47,4 +51,3 @@ Write a summary to `.ai/features/{slug}/changes.md`:
 - Implement exactly what the spec says. Don't add extras.
 - Follow existing patterns in the codebase.
 - Keep changes minimal and focused.
-- If the spec is ambiguous, make a reasonable choice and document it in Notes.
